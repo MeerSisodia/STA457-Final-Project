@@ -1,0 +1,651 @@
+---
+title: "STA457 Group Project"
+author: "Meer Sisodia, Natalia Lisa George, Helen Zhao, Vraj Shah"
+fontsize: 10pt
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+header-includes:
+- \usepackage{setspace}
+- \onehalfspacing
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = FALSE,
+  message = FALSE,
+  warning = FALSE
+)
+```
+
+```{r, show_col_types = FALSE}
+library(readr)
+library(dplyr)
+library(zoo)
+library(lubridate)
+library(ggplot2)
+library(reshape2)
+library(MASS)
+library(tseries)
+
+prices <- read_csv("Daily Prices_ICCO.csv")
+ghana <- read_csv("Ghana_data.csv")
+exc_rate <- read_csv("USD_GHS Historical Data-2.csv")
+ghana$date <- as.Date(ghana$DATE)
+prices$date <- as.Date(prices$Date, format = "%d/%m/%Y")
+ghana <- ghana %>% mutate(PRCP = ifelse(is.na(PRCP), 0, PRCP))
+ghana <- ghana %>%
+  group_by(date) %>%
+  summarise(
+    PRCP = mean(PRCP, na.rm = TRUE),
+    TMAX = mean(TMAX, na.rm = TRUE),
+    TMIN = mean(TMIN, na.rm = TRUE),
+    TAVG = mean(TAVG, na.rm = TRUE)
+)
+ghana <- ghana[, !(names(ghana) %in% "TMIN")]
+ghana <- ghana[, !(names(ghana) %in% "TMAX")]
+```
+
+```{r}
+data <- inner_join(ghana, prices, by = "date")
+data <- data[, !(names(data) %in% "Date")]
+colnames(data) <- c("Date", "PRCP", "TAVG", "Price")
+data <- data[!weekdays(data$Date) %in% c("Saturday", "Sunday"), ]
+```
+
+### Introduction 
+
+Cocoa is a key ingredient for the global food industry and plays a critical role for many companies and their food production. Cocoa prices are influenced by a variety of factors such as climatic conditions, market demand and exchange rates. This report aims to explore the prediction of cocoa prices through statistical models by identifying key predicters of price. 
+	The motivation for this study stems from the increasing volatility of cocoa prices observed in the last year which are driven by climate change, unpredictable weather patterns, diseases that affect the crop and shifts in global demand. Cocoa prices have skyrocketed to nearly $10,000 per metric ton in 2024. Around 80% of the world’s supply comes from Western Africa, particularly Ghana. Hence, understanding the factors that affect the price of cocoa is essential for various stakeholders such as farmers, manufacturers, consumers and governments. 
+	The objective of this analysis is to build a predictive model of cocoa prices using historical data on variables such as average temperature and rainfall. The key challenges of this analysis have been the non-stationary prices of cocoa and several economic trends that can affect the price.  Nevertheless, this report aims to provide a valuable prediction for future cocoa prices considering the recent volatility of the commodity. These predictions will help stakeholders of the industry to make more informed decisions and help policy makers concerned with the economic well being of farmers in cocoa growing regions. 
+
+### Literature Review
+
+Price volatility in agricultural goods can be due to several conditions. Cocoa plants require moderate rainfall and temperatures between 65-90 F. The prediction of commodity prices has been a topic of interest in economic research. Commonly used models are Autoregressive Integrated Moving Average (ARIMA), Generalized Autoregressive Conditional Heteroskedasticity (GARCH), and Vector Autoregressive (VAR) models. As shown by Ketut Sukiyono (2018) the ARIMA method was most suitable for predicting both domestic and foreign prices of cocoa. ARIMA assumes a linear process and can be effective when the time series is stationary. However, ARIMA models are not able to account for exogenous variables such as weather conditions or demand shocks. Engle (2012) showed that GARCH models can be used to model inflation and commodity price. These models are useful to study volatility and variability in prices. Kamu et al. (2010) forecast the prices of cocoa and conclude that GARCH models are the best for predictions. There have also been studies that use VAR models to see the dynamic interactions between multiple time series variables. Kutu (2019) highlights that exchange rate volatility has an impact on the cocoa prices in Nigeria. 
+
+This study builds on existing research by combining a combination of weather factors such as rainfall, temperature and macroeconomic variables such as exchange rate to develop a comprehensive model to predict the price of cocoa. By using Impulse Response Function this study also explores how shocks to temperature, rainfall propagate through the system and affect cocoa price over time which has not been explicitly studied previously. 
+
+### Data 
+In the following analyses, we will be analyzing two datasets, the Cocoa Future Prices data and Ghana’s climate data.
+Sourced from the International Cocoa Organization (ICCO), the Cocoa Future Prices dataset consists of time series data regarding the daily trade day closing prices for cocoa futures contracts traded on major commodity exchanges, measured in US dollars, with the timeframe spanning from March 3rd, 1994, to February 2nd, 2025.
+The Ghana climate dataset contains 53,232 entries of climate data from Ghana, which is the top cocoa-producing country in the world. Sourced from the National Centers for Environmental Information (NCEI), the data includes various parameters recorded by observation stations. Each record includes information consisting of the station ID that the climate was recorded at, the name of the observation station, and the date of the observation. Further, the dataset features daily climatic measurements of each observation station including the precipitation levels, measured in millimeters, and the daily average, maximum, and minimum temperatures, measured at 2 meters above ground level in degrees Fahrenheit. The dataset offers valuable insights into Ghana's daily weather conditions and can be crucial for agricultural planning and for cocoa cultivation, which could potentially be significant for predicting and unveiling the reasons behind cocoa price fluctuations.
+With the data, we will focus on investigating two main variables of interest: the independent variable of TAVG and PRCP, the daily average temperatures and precipitation levels  of each of Ghana’s observation stations, and the main outcome variable of interest of Cocoa Future Prices. 
+
+### Methodology 
+To obtain meaningful results, we first clean the data. We then check for any NA results in the TAVG variable, PRCP variable and the outcome variable of interest, Cocoa Future Prices, as those invalid responses may distort analyses of data findings. Missing values of PRCP variable are taken as zero as no rainfall occurred on that day.  There were no other missing values. We further transform the data by averaging across all observation stations’ daily TAVGs and PRCP to obtain a final average daily temperature and precipitation record for each day. Finally, we omit all temperatures and climatic measurements collected during weekends in the Ghana climate dataset; this exclusion ensures that the climate dataset aligns with the trading days when Cocoa Future Prices are recorded, avoiding any discrepancies in data timelines. 
+```{r, fig.cap="Figure 1"}
+library(ggplot2)
+library(gridExtra)
+
+# Create individual plots
+p1 <- ggplot(data, aes_string(x = "Price")) +
+  geom_histogram(bins = 30, fill = "skyblue", color = "black") +
+  ggtitle("Histogram of Price") +
+  theme_minimal()
+
+p2 <- ggplot(data, aes_string(x = "TAVG")) +
+  geom_histogram(bins = 30, fill = "skyblue", color = "black") +
+  ggtitle("Histogram of TAVG") +
+  theme_minimal()
+
+p3 <- ggplot(data, aes_string(x = "PRCP")) +
+  geom_histogram(bins = 30, fill = "skyblue", color = "black") +
+  ggtitle("Histogram of PRCP") +
+  theme_minimal()
+
+p4 <- ggplot(data, aes_string(y = "Price")) +
+  geom_boxplot(fill = "tomato", color = "black") +
+  ggtitle("Boxplot of Price") +
+  theme_minimal()
+
+p5 <- ggplot(data, aes_string(y = "TAVG")) +
+  geom_boxplot(fill = "tomato", color = "black") +
+  ggtitle("Boxplot of TAVG") +
+  theme_minimal()
+
+# Arrange into 2x2 grid
+grid.arrange(p1, p2, p3, p4, p5, ncol = 3)
+```
+
+The distributions of the independent variable TAVG and PRC (see Figure 1.) and the outcome variable of interest Cocoa Future Prices are displayed above. TAVG’s histogram does not display obvious skews, indicating that the dataset mostly resembles a normal distribution. The mean of the variable is 81.31071, with the median being 81, revealing that most of the sampled Ghana observation stations’ temperatures tend around 81 degrees.The distribution of precipitation has a heavy right skew.
+
+On the other hand, Cocoa Future Prices’ histogram showcases an obvious positive skew, demonstrating that the majority of the Cocoa Future Prices data is centered in the range between 0 to 4000 dollars, with only 339 observations with values ranging from 4000 up to 12000. The discrepancies between the data’s mean and median, with the mean being 2374.009 and the median being 2223.98 where the mean is significantly above the median, also indicate the rightward skew of the dataset.This skewness of the price can also be confirmed from the box plot as there are an outlier that can be seen from the graph.
+
+The boxplots of the two datasets further showcase a clear comparison between the two dataset’s distributions. As displayed in Figure 1, the boxplot of TAVG does not display obvious outliers on either end, matching with the previous analysis of the histogram, resembling the normal distribution. As displayed in Figure 4, the boxplot of Cocoa Future Prices displays a rather large proportion of anomality, with 288 outliers on the positive end. The positive skew of the distribution indicates that there may have been a potential factor of market shock that resulted in a sudden large increase in Cocoa Future Prices, leading to its deviation from its center.
+
+```{r, fig.cap="Figure 2"}
+
+library(gridExtra)
+library(ggplot2)
+
+# First plot: Price Over Time
+p1 <- ggplot(data, aes(x = Date, y = Price)) +
+  geom_line(color = "steelblue") +
+  labs(title = "Price Over Time",
+       x = "Date",
+       y = "Price") +
+  theme_minimal()
+
+# Create the log_price column
+data$log_price <- log(data$Price)
+
+# Second plot: log(Price) Over Time
+p2 <- ggplot(data, aes(x = Date, y = log_price)) +
+  geom_line(color = "steelblue") +
+  labs(title = "log(Price) Over Time",
+       x = "Date",
+       y = "log(Price)") +
+  theme_minimal()
+
+# Third plot: First-Differenced log(Price) Over Time
+data$diff_log_price <- c(NA, diff(data$log_price))
+p3 <- ggplot(data, aes(x = as.Date(Date), y = diff_log_price)) +
+  geom_line(color = "darkred") +
+  labs(title = "First-Differenced log(Price) Over Time",
+       x = "Time",
+       y = "Differenced log(Price)") +
+  theme_minimal()
+
+# Arrange all three plots in a grid with three rows
+grid.arrange(p1, p2, p3, nrow = 3)
+
+```
+
+```{r, fig.cap="Figure 3"}
+acf(na.omit(data$diff_log_price), main="ACF of First Differenced Log(Price)")
+pacf(na.omit(data$diff_log_price), main="PACF of First Differenced Log(Price)")
+```
+
+We now take a deepr look at the price variable (See Figures 2 and 3). The original Price Over Time plot (first graph) shows substantial volatility, with prices fluctuating dramatically between 2000 and 2020, ranging from around 2,000 to over 9,000. The erratic peaks and troughs suggest significant instability, making it difficult to discern a clear trend. To better analyze the data, we first applied a logarithmic transformation, resulting in the log(Price) Over Time plot (second graph). The log-transformed version revealed a more stable pattern, smoothing extreme fluctuations. However, to fully address the remaining non-stationarity, we computed first differences of the log prices, yielding the differenced log(Price) series. This differenced plot now exhibits stationary behavior, with fluctuations centered around zero for reliable time series modeling. Further diagnostics via the ACF plot indicate the differenced series tails off gradually. Meanwhile, the PACF plot displays an erratic spike at lag 4, hinting at a possible ARIMA. Together, these findings justify the use of an ARIMA framework to model the data, so we have fitted the first model as ARIMA (4,1,0). 
+
+Next, to incorporate the effects of temperature and precipitation we employ a linear regression model to try to explain variation in prices. Recognizing the problem of correlated errors we incorporate a GARCH(1,1) model for the error term along with the basic regression model. This helps in capturing time varying volatility, allowing for more accurate price prediction. Also, accounting for the ACF and PACF of the error terms, we then employ a AR(4) + GARCH(1, 1) on the error terms in price. The allows us to account for lagged effects where past price fluctuations influence current changes. We also use a machine learning model- XGBoost, to see if other statistical models provide better predictions. Vector Autoregressive Model is used to see the dynamic relationship between the variables and to see the long-term trends. 
+To fit all these models, the data has been split into a training and testing datasets. We use RMSE and MSE values calculated with testing data to evaluate the models. The testing dataset consists of the last 30 values of the dataset.
+
+
+### Results
+
+The ARIMA(4,1,0) model fits the first-differenced log prices using the following AR(4) process:
+$$
+\Delta y_t = \phi_1 \Delta y_{t-1} + \phi_2 \Delta y_{t-2} + \phi_3 \Delta y_{t-3} + \phi_4 \Delta y_{t-4} + \varepsilon_t
+$$
+
+where  
+- \( \Delta y_t = y_t - y_{t-1} \) is the first difference of the log price,  
+- \( \phi_1, \phi_2, \phi_3, \phi_4 \) are the autoregressive coefficients,  
+- \( \varepsilon_t \) is white noise.
+
+The figure below shows us the values of the RMSE and MAE for this model. We can also see the forecast that this model gives for the test data. 
+
+```{r}
+# Load required libraries
+library(forecast)
+library(ggplot2)
+
+# -------------------------
+# 1. Data Preparation
+data <- data[order(data$Date), ]  # Ensure chronological order
+n <- nrow(data)
+train_size <- n - 30
+train_log_price <- log(data$Price[1:train_size])
+test_actual_price <- data$Price[(train_size + 1):n]
+
+# -------------------------
+# 2. Fit ARIMA(4,1,0)
+model <- Arima(train_log_price, order = c(4, 1, 0))  # ARIMA(4,1,0)
+
+# -------------------------
+# 3. Forecast and Convert to Price
+fc <- forecast(model, h = 30)
+predicted_price <- exp(fc$mean)  # Convert back to original scale
+
+# -------------------------
+# 4. Calculate Metrics
+rmse <- sqrt(mean((test_actual_price - predicted_price)^2))
+mae <- mean(abs(test_actual_price - predicted_price))
+aic <- AIC(model)
+knitr::kable(summary(model)$coef, digits = 4, caption = "ARIMA(4,1,0) Coefficients")
+
+# -------------------------
+# 5. Plot Results
+plot_data <- data.frame(
+  Time = 1:n,
+  Actual = data$Price,
+  Predicted = c(rep(NA, train_size), predicted_price)
+)
+
+ggplot(plot_data[(train_size-29):n, ], aes(x = Time)) +
+  geom_line(aes(y = Actual, color = "Actual Price"), linewidth = 1) +
+  geom_line(aes(y = Predicted, color = "Predicted"), 
+            linetype = "dotted", linewidth = 1.2) +
+  geom_vline(xintercept = train_size + 0.5, 
+             linetype = "dashed", color = "red") +
+  labs(
+    title = "ARIMA(4,1,0) Forecast",
+    subtitle = paste0("RMSE: ", round(rmse, 2), 
+                     " | MAE: ", round(mae, 2)),
+    x = "Time",
+    y = "Price ($)"
+  ) +
+  scale_color_manual(values = c("Actual Price" = "black", 
+                               "Predicted" = "blue")) +
+  theme_minimal()
+```
+Now we move to fitting models which incorporate a regression component. We start by fitting a simple linear regression model and we analyse the residuals.
+
+$$
+\Delta \log(\text{Price}_t) = \beta_0 + \beta_1 \cdot \text{PRCP}_t + \beta_2 \cdot \text{TAVG}_t + \varepsilon_t
+$$
+
+where  
+- \( \Delta \log(\text{Price}_t) \) is the change in log price (i.e., log return),  
+- \( \text{PRCP}_t \) is the precipitation at time \( t \),  
+- \( \text{TAVG}_t \) is the average temperature at time \( t \),  
+- \( \beta_0, \beta_1, \beta_2 \) are regression coefficients,  
+- \( \varepsilon_t \) is the error term.
+
+
+```{r}
+library(lmtest)
+library(knitr)
+
+
+model_train <- lm(diff_log_price ~ PRCP + TAVG, data = data)
+
+# --------- 3. Diagnostic Checks ---------
+# Extract residuals from the training model
+residuals_train <- residuals(model_train)
+
+# ACF and PACF of residuals
+par(mfrow = c(1, 2))  # side-by-side plots
+acf(residuals_train, main = "ACF of Training Residuals")
+pacf(residuals_train, main = "PACF of Training Residuals")
+
+# Residuals vs. Fitted values plot
+par(mfrow = c(1, 1))  # reset to one plot
+plot(fitted(model_train), residuals_train,
+     xlab = "Fitted values", ylab = "Residuals",
+     main = "Residuals vs Fitted (Training)")
+abline(h = 0, col = "red", lty = 2)
+```
+Looking at the ACF and PACF of the residuals, it is quite evident that they are correlated. The residual vs fitted graph shows funneling suggesting heteroskedasticity or that the variances of the errors are not the same. A possible solution for this is to incorporate a GARCH(1, 1) model on the errors.
+Furthermore, it seems that the ACF is tailing off, however the PACF of the errors seems to abruptly cut off at lag 4. Thus, we may also fit an AR(4) + GARCH(1, 1) model on the errors.
+
+The GARCH(1,1) errors model is given by the equations:
+$$
+\Delta \log(\text{Price}_t) = \beta_0 + \beta_1 \cdot \text{PRCP}_t + \beta_2 \cdot \text{TAVG}_t + y_t
+$$
+and
+
+$$
+y_t = \sigma_t \epsilon_t  \quad \sigma_{t}^2 = \alpha_0 + \alpha_1 y_{t-1}^2 + \beta_1 \sigma_{t-1}^2
+$$
+
+
+where  
+- \( \Delta \log(\text{Price}_t) \) is the change in log price (i.e., log return),  
+- \( \text{PRCP}_t \) is the precipitation at time \( t \),  
+- \( \text{TAVG}_t \) is the average temperature at time \( t \),  
+- \( \epsilon_t \) is the error term.
+- \( \sigma_t \) is the variance of the residuals. 
+
+Below we find the results of the fit. 
+```{r}
+# Load required libraries
+library(lmtest)
+library(knitr)
+library(fGarch)
+
+library(lmtest)
+library(knitr)
+library(fGarch)
+library(ggplot2)
+
+# -------------------------
+# 1. Data Preparation
+# Calculate first differences for predictors
+data$delta_TAVG <- c(NA, diff(data$TAVG))
+data$delta_PRCP <- c(NA, diff(data$PRCP))
+
+# Remove first row with NA (due to differencing)
+data <- data[-1, ]
+n <- nrow(data)
+train_size <- n - 30
+train_df <- data[1:train_size, ]
+test_df <- data[(train_size + 1):n, ]
+
+# -------------------------
+# 2. Fit Linear Model with Differenced Predictors
+model_train <- lm(diff_log_price ~ delta_PRCP + delta_TAVG, data = train_df)
+
+# -------------------------
+# 3. Fit GARCH(1,1) on Residuals
+residuals_train <- residuals(model_train)
+model_garch <- garchFit(~ garch(1, 1), data = residuals_train, 
+                        trace = FALSE, include.mean = FALSE)
+
+# -------------------------
+# 4. Forecast on Test Set
+garch_forecast <- predict(model_garch, n.ahead = 30)
+garch_forecast_mean <- garch_forecast$meanForecast
+linear_pred <- predict(model_train, newdata = test_df)
+combined_pred <- linear_pred + garch_forecast_mean  # Predicted diff_log_Price
+
+# -------------------------
+# 5. Reconstruct PRICE
+last_Price_train <- train_df$Price[train_size]  # Last actual Price
+predicted_Price_test <- last_Price_train * exp(cumsum(combined_pred))
+
+# -------------------------
+# 6. Calculate Metrics on PRICE Scale
+actual_Price_test <- test_df$Price
+rmse <- sqrt(mean((actual_Price_test - predicted_Price_test)^2))
+mae <- mean(abs(actual_Price_test - predicted_Price_test))
+
+garch_coefs <- coef(model_garch)
+kable(garch_coefs, digits = 4, caption = "Estimated GARCH(1,1) Coefficients")
+
+# -------------------------
+# 7. Plotting
+plot_window <- (train_size - 29):n  # Last 30 train + 30 test
+
+plot_data <- data.frame(
+  time = 1:n,
+  actual_Price = data$Price,
+  predicted_Price = c(rep(NA, train_size), predicted_Price_test)
+)
+
+ggplot(plot_data[plot_window, ], aes(x = time)) +
+  geom_line(aes(y = actual_Price, color = "Actual Price"), linewidth = 1) +
+  geom_line(aes(y = predicted_Price, color = "Predicted (Test)"), linetype = "dotted", linewidth = 1) +
+  geom_vline(xintercept = train_size + 0.5, linetype = "dashed", color = "red") +
+  labs(
+    title = "Actual vs. Predicted Prices (Linear + GARCH Model)",
+    subtitle = paste("RMSE = ", round(rmse, 2), " | MAE = ", round(mae, 2)),
+    x = "Time",
+    y = "Price ($)",
+    color = "Series"
+  ) +
+  scale_color_manual(values = c("Actual Price" = "black", "Predicted (Test)" = "green")) +
+  theme_minimal()
+```
+Now we fit the second model with an additional AR(1) component on the errors. The results are displayed below.
+
+```{r}
+# Load libraries
+library(forecast)
+library(fGarch)
+library(ggplot2)
+library(knitr)
+
+# Load required libraries
+library(forecast)
+library(fGarch)
+library(ggplot2)
+library(knitr)
+
+# -------------------------
+# 1. Data Split
+data$delta_TAVG <- c(NA, diff(data$TAVG))
+data$delta_PRCP <- c(NA, diff(data$PRCP))
+
+n <- nrow(data)
+train_size <- n - 30
+train_df <- data[1:train_size, ]
+test_df <- data[(train_size + 1):n, ]
+
+# -------------------------
+# 2. Fit Original Linear Model (unchanged)
+model_linear <- lm(diff_log_price ~ PRCP + TAVG, data = train_df)
+
+# -------------------------
+# 3. Fit AR(1) on Linear Model Residuals (ARMA(1,0) = AR(1))
+residuals_linear <- residuals(model_linear)
+model_ar <- Arima(residuals_linear, order = c(4, 0, 0))  # AR(4) on residuals
+
+# -------------------------
+# 4. Fit GARCH(1,1) on AR(1) Residuals
+residuals_ar <- residuals(model_ar)
+model_garch <- garchFit(~ garch(1, 1), data = residuals_ar, 
+                        trace = FALSE, include.mean = FALSE)
+
+# -------------------------
+# 5. Forecast on Test Set
+# Step 1: Predict diff_log_Price using linear model
+linear_pred <- predict(model_linear, newdata = test_df)
+
+# Step 2: Forecast AR(1) residuals (30 steps)
+ar_fc_resid <- forecast(model_ar, h = 30)$mean
+
+# Step 3: Forecast GARCH residuals (30 steps)
+garch_fc_resid <- predict(model_garch, n.ahead = 30)$meanForecast
+
+# Combined forecast: linear + AR(1) + GARCH
+combined_fc_diff_log <- linear_pred + ar_fc_resid + garch_fc_resid
+
+# Step 4: Reconstruct Price from diff_log_Price
+last_log_Price_train <- log(train_df$Price[train_size])
+predicted_log_Price_test <- last_log_Price_train + cumsum(combined_fc_diff_log)
+predicted_Price_test <- exp(predicted_log_Price_test)
+
+# -------------------------
+# 6. Calculate Metrics (Price Scale)
+actual_Price_test <- test_df$Price
+
+# RMSE and MAE
+rmse <- sqrt(mean((actual_Price_test - predicted_Price_test)^2))
+mae <- mean(abs(actual_Price_test - predicted_Price_test))
+
+# -------------------------
+# 7. Plotting
+plot_window <- (train_size - 29):n  # Last 30 train + 30 test
+
+plot_data <- data.frame(
+  time = 1:n,
+  actual_Price = data$Price,
+  predicted_Price = c(rep(NA, train_size), predicted_Price_test)
+)
+
+ggplot(plot_data[plot_window, ], aes(x = time)) +
+  geom_line(aes(y = actual_Price, color = "Actual Price"), linewidth = 1) +
+  geom_line(aes(y = predicted_Price, color = "Predicted (Test)"), linetype = "dotted", linewidth = 1) +
+  geom_vline(xintercept = train_size + 0.5, linetype = "dashed", color = "red") +
+  labs(
+    title = "AR(4)+GARCH(1,1) on Linear Model Residuals",
+    subtitle = paste0("RMSE = ", round(rmse, 2), " | MAE = ", round(mae, 2)),
+    x = "Time",
+    y = "Price",
+    color = "Series"
+  ) +
+  scale_color_manual(values = c("Actual Price" = "black", "Predicted (Test)" = "green")) +
+  theme_minimal()
+```
+The last model we fit is XGBoost. 
+
+```{r}
+# Create date-ordered copy of the data
+data2 <- data
+
+# Load required libraries
+library(xgboost)
+library(ggplot2)
+library(caret)
+library(recipes)  # For preprocessing
+
+# -------------------------
+# 1. Data Preparation with Preprocessing
+n <- nrow(data2)
+train_size <- n - 30
+
+# Create preprocessing recipe (center/scale/normalize)
+preproc <- recipe(Price ~ PRCP + TAVG, data = data2[1:train_size, ]) %>%
+  step_center(all_numeric(), -all_outcomes()) %>%
+  step_scale(all_numeric(), -all_outcomes()) %>%
+  step_YeoJohnson(all_numeric(), -all_outcomes())  # More robust than Box-Cox
+
+prep <- prep(preproc)
+train_processed <- bake(prep, new_data = data2[1:train_size, ])
+test_processed <- bake(prep, new_data = data2[(train_size+1):n, ])
+
+# -------------------------
+# 2. Feature Engineering (add lagged variables)
+data2 <- data2 %>%
+  mutate(
+    PRCP_lag1 = lag(PRCP, 1),
+    TAVG_lag1 = lag(TAVG, 1),
+    Price_lag1 = lag(Price, 1)
+  ) %>%
+  na.omit()  # Remove rows with NA from lagging
+
+# Update train/test split after lagging
+n <- nrow(data2)
+train_size <- n - 30
+
+# -------------------------
+# 3. XGBoost with Time Series CV
+time_folds <- createTimeSlices(
+  1:train_size,
+  initialWindow = train_size - 60,
+  horizon = 30,
+  fixedWindow = TRUE
+)
+
+ctrl <- trainControl(
+  method = "timeslice",
+  index = time_folds$train,
+  indexOut = time_folds$test,
+  savePredictions = "final"
+)
+
+xgb_grid <- expand.grid(
+  nrounds = 150,
+  max_depth = c(3, 6),
+  eta = c(0.01, 0.1),
+  gamma = 0,
+  colsample_bytree = 0.8,
+  min_child_weight = 1,
+  subsample = 0.8
+)
+
+set.seed(123)
+model_xgb <- train(
+  Price ~ PRCP + TAVG + PRCP_lag1 + TAVG_lag1 + Price_lag1,
+  data = data2[1:train_size, ],
+  method = "xgbTree",
+  trControl = ctrl,
+  tuneGrid = xgb_grid,
+  verbosity = 0
+)
+
+# -------------------------
+# 4. Generate Predictions
+test_x <- data2[(train_size+1):n, c("PRCP", "TAVG", "PRCP_lag1", "TAVG_lag1", "Price_lag1")]
+predicted_price <- predict(model_xgb, newdata = test_x)
+
+# -------------------------
+# 5. Performance Metrics
+actual_price <- data2$Price[(train_size+1):n]
+metrics <- postResample(pred = predicted_price, obs = actual_price)
+
+# -------------------------
+# 7. Time Series Plot
+plot_data <- data.frame(
+  Date = data2$Date[(train_size-29):n],
+  Actual = data2$Price[(train_size-29):n],
+  Predicted = c(rep(NA, 30), predicted_price)
+)
+
+ggplot(plot_data, aes(x = Date)) +
+  geom_line(aes(y = Actual, color = "Actual"), linewidth = 1) +
+  geom_line(aes(y = Predicted, color = "Predicted"), 
+            linetype = "dashed", linewidth = 1) +
+  geom_vline(xintercept = data2$Date[train_size], 
+             linetype = "dotted", color = "red") +
+  labs(
+    title = "XGBoost Time Series Forecast",
+    subtitle = paste("RMSE:", round(metrics["RMSE"], 2),
+                     "| MAE:", round(metrics["MAE"], 2),
+                     "| R²:", round(metrics["Rsquared"], 2),
+                     "\nTest Period:",
+                     format(min(plot_data$Date[31:60]), "%Y-%m-%d"),
+                     "to",
+                     format(max(plot_data$Date[31:60]), "%Y-%m-%d")),
+    y = "Price ($)"
+  ) +
+  scale_x_date(date_labels = "%b %d", date_breaks = "1 week") +
+  scale_color_manual(values = c("Actual" = "black", "Predicted" = "blue")) +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+```
+
+In comparing the results of the models used to predict cocoa prices,  The XGBoost model had a significantly better prediction than the time series models.However within the time series models, the Linear Regression model with GARCH(1,1) demonstrated the best performance in capturing the overall trend of the price movements. It incorporates time-varying volatility, provided more accurate predictions during volatile periods. This model's lower RMSE and MAE suggest that it was more adept at modeling the conditional variance in the price data.The other models have done done moderately well but their RMSE values show room for improvement.The other models have done done moderately well but their RMSE values show room for improvement
+
+Analyzing the trends of the forecasted series from the models, we expect an initial rise in the immediate future followed by a sharp decline in the growth rate of Cocoa Future Prices due to its volatile nature. From the estimates of the model, we conclude that the main influencers of the growth rate of Cocoa Future Prices include past growth rates, past volatility of growth rates, and temperature fluctuations in Ghana. The high estimated beta of GARCH(1,1) of a value close to 1 also indicates that the volatility of the financial series is rather persistent, where there is a high potential for sustained periods of fluctuations and risk for Cocoa Future Prices and that shocks in the financial market will have dominating and significant impacts on the series.
+
+
+### Long Term Trends 
+
+```{r}
+library(tseries)
+library(vars)
+
+# Check stationarity for TAVG
+adf.test(data$TAVG)
+
+var_data <- dplyr::select(data, diff_log_price, TAVG)
+var_data <- na.omit(var_data)
+VARselect(var_data, lag.max = 12, type = "const")
+
+var_model <- VAR(var_data, p = 12, type = "const")  # Adjust `p` based on above
+
+irf_result <- irf(var_model,
+                  impulse = "TAVG",
+                  response = "diff_log_price",
+                  n.ahead = 10,
+                  boot = TRUE)
+
+plot(irf_result)
+```
+
+```{r}
+# Check stationarity for TAVG
+adf.test(data$PRCP)
+
+var_data <- dplyr::select(data, diff_log_price, PRCP)
+var_data <- na.omit(var_data)
+VARselect(var_data, lag.max = 12, type = "const")
+
+var_model <- VAR(var_data, p = 12, type = "const")  # Adjust `p` based on above
+
+irf_result <- irf(var_model,
+                  impulse = "PRCP",
+                  response = "diff_log_price",
+                  n.ahead = 10,
+                  boot = TRUE)
+
+plot(irf_result)
+
+```
+
+
+To clearly see dynamic relationships between cocoa prices and average temperature and rainfall we use VAR analysis. Using the Dickey-Fuller test we ensure all the variables are stationary. We used first differenced log of price to ensure stationarity. The VAR model allows us to see different lags of variables hence capturing feedback effects over time. More importantly we look at the Impulse Response Functions derived from the VAR reveal how shocks to temperature and rainfall influence cocoa price over the next 10 months. We have also used VARselect to identify the optimal lag to use for the impulse functions. As seen in the figures below, the black solid line represents the estimated response of price to a one-time shock in temperature or rainfall. The red lines are the 95% confidence intervals. The red line at zero is the baseline, indicating no effect. If the black line deviates from this line outside the confidence intervals the effect is statistically significant. 
+
+The impulse response for precipitation is negative in the first period response, so an decrease in precipitation causes a small decrease in cocoa price. The opposite is shown in temperature with a positive response in the first period, so a increase in temperature causes an increase in price. However, in the long term the response oscillates and does not settle on a single sign, suggesting no clear persistent effect. The confidence intervals are large and so there is no strong predictable long-term impact of temperature on cocoa prices. 
+
+
+### Discussion and Conclusion 
+Our analysis reveals complex interactions between climate variables and cocoa price volatility. The GARCH(1,1) model effectively captured the persistent volatility in cocoa prices. However, when examining the VAR impulse response functions, we found that temperature shocks produce unstable and unpredictable effects over longer time periods. 
+
+Our study faces several limitations worth noting. First, our regression framework with time series error components assumes known future values of weather variables, which is unrealistic for practical forecasting scenarios. This constrains our ability to predict prices under changing climate conditions. Second, while our classical time series models provide valuable insights, they may not capture nonlinear relationships as effectively as machine learning approaches like XGBoost, potentially affecting forecast accuracy. Third, our dataset lacks information on cocoa crop diseases, which represent significant supply-side disruptions and likely contribute to the dramatic price spikes observed recently, with cocoa prices reaching nearly $10,000 per metric ton in 2024.
+
+Future research could benefit by employing more sophisticated machine learning techniques to model complex interactions, integrating data on plant diseases affecting cocoa crops, and expanding the model to include exchange rate dynamics. As cocoa is a globally traded commodity, exchange rate fluctuations—particularly between the US dollar and Ghanaian cedi, as highlighted in the literature—could further elucidate price volatility by capturing currency-driven cost variations in international trade.
+
+Despite these constraints, our combined linear-GARCH model demonstrates promising performance for short-term price forecasting, while the VAR analysis clarifies how weather-related shocks propagate through the cocoa market system. Industry stakeholders should remain aware of cocoa’s inherent price volatility and develop adaptive strategies to navigate market uncertainties.
+
+
+### References
+1. Sukiyono, Ketut & Nabiu, Musriyadi & Sumantri, Bambang & Novanda, Ridha & Arianti, Nyayu & Sriyoto, & Yuliarso, M. & Badrudin, Redy & Romdhon, Muhamad & Mustamam, H.. (2018). Selecting an Accurate Cacao Price Forecasting Model. Journal of Physics: Conference Series. 1114. 012116. 10.1088/1742-6596/1114/1/012116. 
+2. Engle, R. F. (1982). Autoregressive Conditional Heteroscedasticity with Estimates of the Variance of United Kingdom Inflation. Econometrica, 50(4), 987–1007
+3. Lintang, K. L., & Kurniawan, M. L. A. (2023). Vector Autoregressive (VAR) Analysis of Cocoa Export in Indonesia. Journal of Economics Research and Social Sciences, 7(2),192-205.
+4.Ketut Sukiyono et al 2018 J. Phys.: Conf. Ser. 1114 012116
+5. Alori, Alaba & Kutu, Adebayo. (2019). Export Function of Cocoa Production, Exchange Rate Volatility and Prices in Nigeria. Journal of Economics and Behavioral Studies. 11. 1. 10.22610/jebs.v11i2(J).2813. 
